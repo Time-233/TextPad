@@ -1,0 +1,77 @@
+name: Build TextPad IPA
+
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: 编译未签名 IPA
+    runs-on: macos-latest
+    timeout-minutes: 40
+    steps:
+      - name: 检出源代码
+        uses: actions/checkout@v4
+
+      - name: 查看编译环境
+        run: |
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
+
+      - name: 安装 XcodeGen
+        run: brew install xcodegen
+
+      - name: 生成 Xcode 工程
+        run: xcodegen generate
+
+      - name: 生成 App 图标
+        run: python3 scripts/make_icon.py Assets.xcassets/AppIcon.appiconset/AppIcon.png
+
+      - name: 编译（关闭签名）
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -project TextPad.xcodeproj \
+            -scheme TextPad \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            build
+
+      - name: 打包成 ipa
+        run: |
+          rm -rf Payload TextPad.ipa
+          mkdir Payload
+          cp -R "build/Build/Products/Release-iphoneos/TextPad.app" Payload/
+          zip -qry TextPad.ipa Payload
+          ls -lh TextPad.ipa
+
+      - name: 上传构建产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: TextPad-ipa
+          path: TextPad.ipa
+          retention-days: 30
+
+      - name: 发布到 Releases
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: build-${{ github.run_number }}
+          name: TextPad build ${{ github.run_number }}
+          files: TextPad.ipa
+          body: |
+            未签名 IPA（${{ github.sha }}）
+
+            安装方法：Windows 电脑用 Sideloadly + 自己的 Apple ID 自签名后装进 iPhone。
